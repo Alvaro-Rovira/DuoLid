@@ -4,10 +4,12 @@ App de barra de menús para macOS que recrea en un MacBook el efecto de transici
 abrir y cerrar la tapa: la pantalla se desenfoca y se oscurece a medida que la cierras, y se enfoca
 al abrirla. La intensidad sigue en tiempo real al ángulo de la tapa, leído del sensor del propio Mac.
 
-- Tapa cerrada (≤ 12°): desenfoque y oscurecimiento al máximo. El máximo se alcanza a ~12° y no a 0°
-  porque la pantalla se apaga justo antes de cerrar del todo.
-- Tapa abierta (≥ 100°): efecto invisible y ventana oculta (no gasta GPU).
-- Entre medias, curva suave. Al abrir, la pantalla primero se ilumina y después se enfoca.
+- El desenfoque es progresivo en el espacio: nace en la bisagra y crece hacia el borde superior.
+  El contenido no se escala ni se mueve; solo se emborrona y se funde a negro.
+- El negro avanza al doble de ritmo que el desenfoque: el borde superior llega a negro primero, y
+  en el último tramo (≈33° → 12°) toda la pantalla se funde a negro opaco.
+- Tapa abierta (≥ 100°): efecto invisible y ventana oculta (no gasta GPU). Al abrir, el recorrido es
+  el inverso.
 
 ## Requisitos
 
@@ -47,9 +49,11 @@ Haz clic en el icono del portátil de la barra de menús:
 
 Permite ajustar el efecto sin mover la tapa: un slider de **ángulo simulado**, un botón que reproduce
 un cierre y apertura (con lecturas a 10 Hz como el sensor real), y los parámetros del efecto:
-desenfoque máximo, oscurecimiento máximo, ángulo de efecto máximo (12°) y ángulo a partir del cual es
-invisible (100°). Si sueles trabajar con la pantalla por debajo de 100°, baja este último. Al cerrar
-el panel vuelve a mandar el sensor real.
+desenfoque máximo (hasta 72 pt), oscurecimiento máximo, exponente del degradado (cómo de deprisa
+crece el efecto desde la bisagra), ritmo del oscurecimiento respecto al desenfoque, efecto mínimo en
+la bisagra, *Invertir dirección del gradiente*, ángulo de efecto máximo (12°) y ángulo a partir del
+cual es invisible (100°). Si sueles trabajar con la pantalla por debajo de 100°, baja este último. Al
+cerrar el panel vuelve a mandar el sensor real.
 
 Argumentos de línea de comandos para pruebas:
 
@@ -71,10 +75,12 @@ open build/DuoLid.app --args --no-sensor            # fuerza el respaldo de "pan
 - La app está firmada ad hoc. Si la descargas compilada en otro Mac, Gatekeeper puede bloquearla:
   compílala tú mismo o ábrela con clic derecho → Abrir.
 
-> El desenfoque de radio variable usa la API privada `CGSSetWindowBackgroundBlurRadius` (la misma que
-> iTerm2). Se carga en tiempo de ejecución; si una versión futura de macOS la elimina, la app pasa
-> automáticamente a `NSVisualEffectView` (un desenfoque fijo que se funde por opacidad). Por usar una
-> API privada, la app no es apta para la Mac App Store.
+> El desenfoque usa APIs privadas de Core Animation: un `CABackdropLayer` propio (la capa que usa
+> `NSVisualEffectView` por dentro) con el filtro `variableBlur`, cuyo radio en cada punto es
+> `radio × máscara`. Se cargan en tiempo de ejecución. Si faltan en una versión futura de macOS, la
+> app pasa a `CGSSetWindowBackgroundBlurRadius` (desenfoque uniforme) y, si tampoco está, a
+> `NSVisualEffectView` (desenfoque fijo que se funde). El log (`log show --predicate 'subsystem ==
+> "DuoLid"'`) dice cuál está activo. Por usar APIs privadas, la app no es apta para la Mac App Store.
 
 ## Cómo funciona
 
@@ -103,10 +109,13 @@ de la pantalla: entre lecturas extrapola con la última velocidad medida (como m
 muelle críticamente amortiguado (respuesta 0,15 s) sigue a ese objetivo sin rebotes. Con la tapa a
 90°/s, la animación avanza 1,5° por fotograma en vez de saltar 9° cada seis.
 
-**Efecto.** `EffectCurve` convierte el ángulo en intensidad (smoothstep entre 12° y 100°). Una ventana
-sin bordes por pantalla integrada, en el nivel `screenSaver`, transparente a los clics y en todos los
-Escritorios, aplica el desenfoque y un degradado oscuro que nace en la bisagra y sube al cerrar. Un
-`CADisplayLink` solo corre mientras hay algo que animar.
+**Efecto.** `EffectCurve` convierte el ángulo en progreso `p` (smoothstep entre 12° y 100°) y
+`SpatialEffect` lo reparte por la pantalla según la altura `g` respecto a la bisagra:
+desenfoque `= radio · p · peso(g)` y negro `= max(min(1, 2 · p · peso(g)), fundido final)`, con
+`peso(g) = (0,05 + 0,95 · g)^1,35`. Una ventana sin bordes por pantalla integrada, en el nivel
+`screenSaver`, transparente a los clics y en todos los Escritorios, desenfoca lo que hay detrás
+con una máscara generada una vez y pinta encima un degradado negro de 16 paradas. Por fotograma
+solo cambian el radio y los 16 alfas. Un `CADisplayLink` solo corre mientras hay algo que animar.
 
 ### Diagnóstico del sensor
 
@@ -125,11 +134,13 @@ Sources/DuoLidCore/        lógica sin interfaz (probada con swift test)
   LidAngleSensor.swift     lectura del sensor por IOKit/HID
   AngleSmoother.swift      predicción + muelle entre lecturas
   EffectCurve.swift        ángulo → intensidad
+  SpatialEffect.swift      intensidad → blur y negro según la altura respecto a la bisagra
 Sources/DuoLid/            app (SwiftUI + AppKit)
   DuoLidApp.swift          MenuBarExtra y AppDelegate
   AppModel.swift           une ajustes, motor, atajo y panel
   EffectEngine.swift       bucle de animación, sensor / respaldo al despertar
   OverlayWindow.swift      ventana del efecto y desenfoque
+  VariableBlur.swift       CABackdropLayer + variableBlur y su máscara
   MenuContentView.swift    menú de la barra
   TuningPanel.swift        panel de ajuste con ángulo simulado
   GlobalHotKey.swift       atajo ⌃⌥⌘D
