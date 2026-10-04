@@ -235,25 +235,33 @@ final class EffectEngine {
     }
 }
 
-/// Cómo se dibuja el overlay para una intensidad dada.
+/// Cómo se dibuja el overlay para un progreso dado.
 struct OverlayAppearance: Equatable {
     var progress: Double
-    /// Radio de desenfoque de lo que hay detrás, en puntos.
+    /// Radio de desenfoque donde el efecto es máximo (borde lejano a la bisagra), en puntos.
     var blurRadius: Double
-    /// Opacidad del degradado oscuro (0…1).
-    var dimming: Double
+    /// Multiplicador del negro: intensidad × oscurecimiento máximo.
+    var dimmingScale: Double
+    var spatial: SpatialEffect
 
     @MainActor
     init(progress: Double, settings: Settings) {
         let p = min(max(progress, 0), 1)
         self.progress = p
         blurRadius = settings.maxBlurRadius * settings.intensity * p
-        // El oscurecimiento cae antes que el desenfoque: al abrir, la pantalla primero se
-        // ilumina y después se enfoca.
-        dimming = settings.maxDimming * settings.intensity * pow(p, 1.6)
+        dimmingScale = settings.maxDimming * settings.intensity
+        spatial = settings.spatialEffect
     }
 
-    var isVisible: Bool { blurRadius >= 0.5 || dimming >= 0.004 }
+    /// Opacidad del negro en `count` paradas, de la bisagra al borde superior.
+    func dimAlphas(stops count: Int) -> [Double] {
+        spatial.dimAlphas(stops: count, p: progress).map { $0 * dimmingScale }
+    }
+
+    var isVisible: Bool {
+        let darkest = max(spatial.dimAlpha(g: 0, p: progress), spatial.dimAlpha(g: 1, p: progress))
+        return blurRadius >= 0.5 || darkest * dimmingScale >= 0.004
+    }
 }
 
 /// Envoltorio de `CADisplayLink` que se puede pausar cuando no hay nada que animar.

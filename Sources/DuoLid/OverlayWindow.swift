@@ -1,4 +1,5 @@
 import AppKit
+import DuoLidCore
 import os
 import QuartzCore
 
@@ -52,14 +53,30 @@ final class OverlayController {
 }
 
 /// Ventana sin bordes, a pantalla completa, por encima de todo y transparente a los clics.
-/// Desenfoca lo que tiene detrás y pinta un degradado oscuro que nace en la bisagra.
+/// Desenfoca lo que tiene detrás, más cuanto más lejos de la bisagra, y encima pinta un
+/// degradado negro que nace en el borde superior y acaba cubriendo toda la pantalla.
 @MainActor
 final class OverlayWindow: NSWindow {
-    private let dimmingLayer = CAGradientLayer()
+    /// Cómo se desenfoca lo que hay detrás, de mejor a peor.
+    enum BlurBackend: String {
+        case variable = "variableBlur (CABackdropLayer)"
+        case uniform = "CGSSetWindowBackgroundBlurRadius (uniforme)"
+        case visualEffect = "NSVisualEffectView (fundido)"
+    }
+
+    private static let dimmingStops = 16
+    private static let log = Logger(subsystem: "DuoLid", category: "overlay")
+
+    let blurBackend: BlurBackend
+    private let variableBlur: VariableBlurLayer?
     private var fallbackBlurView: NSVisualEffectView?
-    private var appliedBlurRadius: Int?
+    private let dimmingLayer = CAGradientLayer()
+    private var maskKey: BlurMask.Key?
+    private var appliedUniformRadius: Int?
 
     init(screen: NSScreen) {
+        variableBlur = VariableBlurLayer()
+        blurBackend = variableBlur != nil ? .variable : (PrivateWindowBlur.isAvailable ? .uniform : .visualEffect)
         super.init(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
         isOpaque = false
@@ -75,7 +92,11 @@ final class OverlayWindow: NSWindow {
         content.wantsLayer = true
         contentView = content
 
-        if !PrivateWindowBlur.isAvailable {
+        if let variableBlur {
+            variableBlur.layer.frame = content.bounds
+            variableBlur.layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+            content.layer?.addSublayer(variableBlur.layer)
+        } else if blurBackend == .visualEffect {
             // Respaldo público: desenfoque de radio fijo que se funde con la opacidad.
             let blurView = NSVisualEffectView(frame: content.bounds)
             blurView.autoresizingMask = [.width, .height]
@@ -87,13 +108,19 @@ final class OverlayWindow: NSWindow {
             fallbackBlurView = blurView
         }
 
-        // En las capas de AppKit el origen está abajo: (0.5, 0) es el borde de la bisagra.
+        // En las capas de AppKit el origen está abajo: (0.5, 0) es el borde de la bisagra, y la
+        // parada 0 de `dimAlphas` corresponde a la bisagra.
         dimmingLayer.frame = content.bounds
         dimmingLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         dimmingLayer.startPoint = CGPoint(x: 0.5, y: 0)
         dimmingLayer.endPoint = CGPoint(x: 0.5, y: 1)
-        dimmingLayer.opacity = 0
+        dimmingLayer.locations = (0..<Self.dimmingStops).map {
+            NSNumber(value: Double($0) / Double(Self.dimmingStops - 1))
+        }
+        dimmingLayer.colors = Array(repeating: NSColor.clear.cgColor, count: Self.dimmingStops)
         content.layer?.addSublayer(dimmingLayer)
+
+        Self.log.notice("Desenfoque activo: \(self.blurBackend.rawValue, privacy: .public)")
     }
 
     override var canBecomeKey: Bool { false }
@@ -103,28 +130,41 @@ final class OverlayWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     func apply(_ appearance: OverlayAppearance) {
-        let radius = Int(appearance.blurRadius.rounded())
-        if radius != appliedBlurRadius, PrivateWindowBlur.setRadius(radius, for: self) {
-            appliedBlurRadius = radius
-        }
-        fallbackBlurView?.alphaValue = min(appearance.blurRadius / Settings.Defaults.maxBlurRadius, 1)
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        dimmingLayer.opacity = Float(appearance.dimming)
-        // Al cerrar, la sombra sube desde la bisagra hasta cubrir la pantalla entera.
-        let topAlpha = 0.25 + 0.75 * appearance.progress
-        dimmingLayer.colors = [
-            NSColor.black.cgColor,
-            NSColor.black.withAlphaComponent(topAlpha).cgColor,
-        ]
+
+        switch blurBackend {
+        case .variable:
+            updateMaskIfNeeded(appearance.spatial)
+            variableBlur?.setRadius(appearance.blurRadius)
+        case .uniform:
+            let radius = Int(appearance.blurRadius.rounded())
+            if radius != appliedUniformRadius, PrivateWindowBlur.setRadius(radius, for: self) {
+                appliedUniformRadius = radius
+            }
+        case .visualEffect:
+            fallbackBlurView?.alphaValue = min(appearance.blurRadius / Settings.Defaults.maxBlurRadius, 1)
+        }
+
+        dimmingLayer.colors = appearance.dimAlphas(stops: Self.dimmingStops).map {
+            NSColor.black.withAlphaComponent($0).cgColor
+        }
         CATransaction.commit()
     }
 
     func hide() {
         orderOut(nil)
         // Al volver a mostrarse se reenvía el radio, por si el servidor de ventanas lo descartó.
-        appliedBlurRadius = nil
+        appliedUniformRadius = nil
+    }
+
+    /// La máscara solo se regenera si cambian el tamaño o la forma del degradado, nunca por fotograma.
+    private func updateMaskIfNeeded(_ spatial: SpatialEffect) {
+        guard let variableBlur, let size = contentView?.bounds.size else { return }
+        let key = BlurMask.Key(size: size, shape: spatial.maskShape)
+        guard key != maskKey, let mask = BlurMask.make(size: size, spatial: spatial) else { return }
+        variableBlur.setMask(mask)
+        maskKey = key
     }
 }
 
