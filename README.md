@@ -16,7 +16,7 @@ al abrirla. La intensidad sigue en tiempo real al ángulo de la tapa, leído del
 - macOS 14 o posterior.
 - Un MacBook con sensor de ángulo de tapa: MacBook Air M2 o posterior, MacBook Pro de 14"/16" (y el
   16" de 2019). Los M1 y los MacBook Pro de 13" no lo exponen. Sin sensor, la app usa un respaldo:
-  al encenderse la pantalla anima de desenfocado a nítido en 0,6 s.
+  al encenderse la pantalla pasa de negro a nítido, desenfocada por el camino, en 0,6 s.
 - Command Line Tools de Xcode (`xcode-select --install`) o Xcode.
 
 ## Compilar y ejecutar

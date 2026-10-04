@@ -186,6 +186,10 @@ final class EffectEngine {
                     MainActor.assumeIsolated { self?.receive(sample) }
                 }
             }
+            if isSimulating {
+                // Mientras se simula se ignoran las lecturas del sensor: hay que volver a dar el ángulo.
+                feed(simulatedAngle, at: CACurrentMediaTime())
+            }
             startTicking()
         } else if !settings.isEnabled, isRunning {
             isRunning = false
