@@ -12,7 +12,7 @@ final class TuningPanelController: NSObject, NSWindowDelegate {
         self.engine = engine
         // Tamaño fijo: dejar que el panel se ajuste al Form agrupado provoca un bucle de layout.
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 780),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
         panel.contentView = NSHostingView(rootView: TuningView(settings: settings, engine: engine))
@@ -67,10 +67,18 @@ private struct TuningView: View {
 
             Section("Efecto") {
                 ValueSlider(title: "Intensidad", value: $settings.intensity, range: 0...1, format: percent)
-                ValueSlider(title: "Desenfoque máximo", value: $settings.maxBlurRadius, range: 0...80) {
+                ValueSlider(title: "Desenfoque máximo", value: $settings.maxBlurRadius, range: 0...72) {
                     "\(Int($0)) pt"
                 }
                 ValueSlider(title: "Oscurecimiento máximo", value: $settings.maxDimming, range: 0...1, format: percent)
+                ValueSlider(title: "Exponente del degradado", value: $settings.gradientExponent, range: 0.8...2.5) {
+                    String(format: "%.2f", $0)
+                }
+                ValueSlider(title: "Ritmo del oscurecimiento", value: $settings.darkenFactor, range: 1...3) {
+                    String(format: "×%.1f", $0)
+                }
+                ValueSlider(title: "Efecto mínimo en la bisagra", value: $settings.hingeFloor, range: 0...0.3, format: percent)
+                Toggle("Invertir dirección del gradiente", isOn: $settings.invertGradient)
                 ValueSlider(title: "Efecto máximo por debajo de", value: $settings.fullEffectAngle, range: 0...45, format: degrees)
                 ValueSlider(title: "Invisible por encima de", value: $settings.invisibleAngle, range: 60...140, format: degrees)
                 Button("Valores por defecto") { settings.resetEffectTuning() }
